@@ -7,16 +7,17 @@ import com.ttProject.xuggle.flv.FlvHandlerFactory;
  * @author taktod
  */
 public class Entry {
+	public static String targetFile = "mario.flv";
 	/**
 	 * @param args
 	 */
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		System.out.println("プログラムを開始します。");
 
 		FlvHandlerFactory.getFactory(); // factoryをあけておかないと、url登録ができないのでやっとく。
 
 		// データが準備できているので、コンバートを開始します。
-		Thread transcoder = new Thread(new Transcoder0());
+		Thread transcoder = new Thread(new Transcoder3());
 		transcoder.start();
 	}
 }

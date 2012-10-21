@@ -3,24 +3,31 @@ package com.ttProject.xuggle;
 import java.io.FileInputStream;
 
 import com.flazr.util.Utils;
+import com.ttProject.xuggle.flv.FlvHandlerFactory;
 import com.xuggle.ferry.IBuffer;
 import com.xuggle.xuggler.IAudioSamples;
 import com.xuggle.xuggler.ICodec;
 //import com.xuggle.xuggler.IContainer;
+import com.xuggle.xuggler.IContainer;
+import com.xuggle.xuggler.IContainerFormat;
 import com.xuggle.xuggler.IError;
 import com.xuggle.xuggler.IPacket;
 import com.xuggle.xuggler.IRational;
+import com.xuggle.xuggler.ISimpleMediaFile;
+import com.xuggle.xuggler.IStream;
 import com.xuggle.xuggler.IStreamCoder;
 import com.xuggle.xuggler.IVideoPicture;
+import com.xuggle.xuggler.SimpleMediaFile;
 
 /**
  * 実際の変換処理
  * ファイルを読み込んでデコード処理まで実行
+ * うまくいかないので、ffmpegでIContainerを開かせてから、メディアデータは自力でおくるようにしてみる。
  * @author taktod
  */
-public class Transcoder2 implements Runnable {
+public class Transcoder3 implements Runnable {
 	/** 入力コンテナ */
-//	private IContainer inputContainer;
+	private IContainer inputContainer;
 	/** 処理中であるかフラグ */
 	private boolean keepRunning = true;
 
@@ -29,9 +36,9 @@ public class Transcoder2 implements Runnable {
 	/** 映像のデコード用コーダー */
 	private IStreamCoder inputVideoCoder;
 	/** 音声のストリームindex番号保持 */
-	private int audioStreamId = 1;
+	private int audioStreamId = -1;
 	/** 映像のストリームindex番号保持 */
-	private int videoStreamId = 0;
+	private int videoStreamId = -1;
 
 	/**
 	 * コンバートの実処理
@@ -59,9 +66,24 @@ public class Transcoder2 implements Runnable {
 	 * コンテナを開きます
 	 */
 	private void openContainer() {
+		// コンテナを普通に開きます。
+		// ffmpeg -f flv -i hoge.flv 
+		String url;
+		int retval = -1;
+		url = FlvHandlerFactory.DEFAULT_PROTOCOL + ":test"; // urlをつくって、ファイルオープンとflvHandlerFactoryを結びつける。
+		ISimpleMediaFile inputInfo = new SimpleMediaFile();
+		inputInfo.setURL(url); // -i hoge.flvの部分に相当する動作
+		inputContainer = IContainer.make();
+		IContainerFormat inputFormat = IContainerFormat.make();
+		inputFormat.setInputFormat("flv"); // -f flvに相当する動作
+		retval = inputContainer.open(url, IContainer.Type.READ, inputFormat, true, false);
+		if(retval < 0) {
+			throw new RuntimeException("入力用のURLを開くことができませんでした。");
+		}
+		System.out.println("入力コンテナを開くことができました。");
 		// コンテナを開くかわりに自力で読み込みます。
 		// ffmpeg -f flv -i hoge.flv 
-		// 読み込みターゲットファイル
+		// 読み込みターゲットファイル(ファイルも普通に開きます。)
 		try {
 			FileInputStream fis = new FileInputStream(Entry.targetFile);
 			byte[] header = new byte[13]; // flvのheaderって13バイトだっけ？
@@ -136,7 +158,6 @@ public class Transcoder2 implements Runnable {
 				size -= 1;
 				break;
 			case 7: // AVC
-				setupVideoCoder(ICodec.ID.CODEC_ID_H264);
 				// AVCの場合は、さらに4バイトデータがある。(がとりあえず無視しておく。)
 				fis.skip(4);
 				size -= 5;
@@ -147,7 +168,7 @@ public class Transcoder2 implements Runnable {
 			}
 			mediaData = new byte[size];
 			fis.read(mediaData);
-			IBuffer bufData = IBuffer.make(null, mediaData, 0, size);
+			IBuffer bufData = IBuffer.make(inputContainer, mediaData, 0, size);
 			packet.setData(bufData); // データもいれとく。
 			packet.setPosition(position);
 			position += size;
@@ -178,34 +199,10 @@ public class Transcoder2 implements Runnable {
 			byte data = (byte)fis.read();
 			byte[] mediaData;
 			// フォーマット確認
-			int sampleRate;
-			int channels;
-			switch((data & 0x0C) >>> 2) {
-			default:
-			case 0:
-				sampleRate = 5500;
-				break;
-			case 1:
-				sampleRate = 11025;
-				break;
-			case 2:
-				sampleRate = 22050;
-				break;
-			case 3:
-				sampleRate = 44100;
-				break;
-			}
-			if((data & 0x01) == 1) {
-				channels = 2;
-			}
-			else {
-				channels = 1;
-			}
 			switch((data & 0xF0) >>> 4) {
 			case 0: // Raw PCM (opensourceflashのflv記述より)
 			case 1: // Adpcm
 			case 2: // Mp3
-				setupAudioCoder(ICodec.ID.CODEC_ID_MP3, channels, sampleRate);
 			case 3: // Pcm
 			case 4: // Nelly_16
 			case 5: // Nelly_8
@@ -230,7 +227,7 @@ public class Transcoder2 implements Runnable {
 			}
 			mediaData = new byte[size];
 			fis.read(mediaData);
-			IBuffer bufData = IBuffer.make(null, mediaData, 0, size);
+			IBuffer bufData = IBuffer.make(inputContainer, mediaData, 0, size);
 			packet.setData(bufData); // データもいれとく。
 			packet.setPosition(position);
 			position += size;
@@ -248,34 +245,6 @@ public class Transcoder2 implements Runnable {
 			throw new RuntimeException("よくわからんエラーが発生");
 		}
 	}
-	private void setupVideoCoder(ICodec.ID id) {
-		if(inputVideoCoder == null) {
-			inputVideoCoder = IStreamCoder.make(IStreamCoder.Direction.DECODING);
-			inputVideoCoder.setWidth(640);
-			inputVideoCoder.setHeight(360);
-			inputVideoCoder.setBitRate(820000);
-			inputVideoCoder.setFrameRate(IRational.make(58.82));
-			inputVideoCoder.setCodec(id);
-			int retval = inputVideoCoder.open();
-			if(retval < 0) {
-				System.out.println("videoエラーになった・・・orz");
-			}
-		}
-	}
-	private void setupAudioCoder(ICodec.ID id, int channels, int sampleRate) {
-		if(inputAudioCoder == null) {
-			inputAudioCoder = IStreamCoder.make(IStreamCoder.Direction.DECODING);
-//			inputAudioCoder.setBitRate(64000); // bitrateを調べる方法がないので、とりあえずほっとく。
-			inputAudioCoder.setCodec(id);
-			inputAudioCoder.setChannels(channels);
-			inputAudioCoder.setSampleRate(sampleRate);
-			inputAudioCoder.setTimeBase(IRational.make(1, 1000));
-			int retval = inputAudioCoder.open();
-			if(retval < 0) {
-				System.out.println("エラーになった・・・orz");
-			}
-		}
-	}
 	/**
 	 * 変換処理の実体
 	 */
@@ -284,6 +253,21 @@ public class Transcoder2 implements Runnable {
 		while(keepRunning) {
 			int retval = -1;
 			IPacket packet = IPacket.make();
+
+			if(audioStreamId == -1 || videoStreamId == -1) {
+				System.out.println("オリジナルのデータを読み込みます。");
+				retval = inputContainer.readNextPacket(packet); // packetに処理するパケットデータが書き込まれます。
+				if(retval < 0) {
+					if("Resource temporarily unavailable".equals(IError.make(retval).getDescription())){
+						// リソースが一時的にないだけなら、放置
+						continue;
+					}
+					System.out.print("エラーが発生しました。パケット読み込み:");
+					System.out.println(IError.make(retval).getDescription());
+					break;
+				}
+			} // */
+			
 			readNextPacket(packet);
 			try {
 				System.out.println(packet.toString());
@@ -296,12 +280,11 @@ public class Transcoder2 implements Runnable {
 			catch (Exception e) {
 				e.printStackTrace();
 			}// */
-//			throw new RuntimeException("おわりだ");
 			// 入力コーダーを確認します。
-/*			if(!checkInputCoder(packet)) {
+			if(!checkInputCoder(packet)) {
 				// 処理すべきデータではないので、スキップ
 				continue;
-			}*/
+			}
 			// 処理するパケットが音声であるか、映像であるか判定して切り分ける。
 			int index = packet.getStreamIndex();
 			if(index == audioStreamId) {
@@ -314,7 +297,6 @@ public class Transcoder2 implements Runnable {
 					if(retval <= 0) {
 						System.out.println(IError.make(retval));
 						System.out.println("aデコードに失敗");
-//						throw new RuntimeException("audioのデコードに失敗した。");
 						break;
 					}
 					offset += retval;
@@ -332,8 +314,6 @@ public class Transcoder2 implements Runnable {
 					retval = inputVideoCoder.decodeVideo(inPicture, packet, offset);
 					if(retval <= 0) {
 						System.out.println("vデコード失敗");
-//						return;
-//						continue;
 						break;
 					}
 					offset += retval;
@@ -368,5 +348,65 @@ public class Transcoder2 implements Runnable {
 			}
 			fis = null;
 		}
+	}
+	/**
+	 * パケットに付随しているコーダーが利用中であるか確認して、利用中でないなら開く
+	 * またstreamIndexを保持しておくことで、transcode上で音声処理か映像処理か判定する。
+	 * @param packet
+	 * @return
+	 */
+	private boolean checkInputCoder(IPacket packet) {
+		IStream stream = inputContainer.getStream(packet.getStreamIndex());
+		if(stream == null) {
+			System.out.println("ストリームが取得できない。");
+			return false;
+		}
+		IStreamCoder coder = stream.getStreamCoder();
+		if(coder == null) {
+			System.out.println("コーダーが取得できない。");
+			return false;
+		}
+		if(coder.getCodecType() == ICodec.Type.CODEC_TYPE_AUDIO) {
+			if(inputAudioCoder == null) {
+				System.out.println("音声コーダー追加");
+			}
+			else if(inputAudioCoder.hashCode() == coder.hashCode()){
+				// すでに開いているコーダー
+				return true;
+			}
+			else {
+				System.out.println("音声コーダー開き直し");
+				inputAudioCoder.close();
+				inputAudioCoder = null;
+			}
+			audioStreamId = packet.getStreamIndex();
+			if(coder.open() < 0) {
+				throw new RuntimeException("audio入力用のデコーダを開くのに失敗したよん");
+			}
+			inputAudioCoder = coder;
+		}
+		else if(coder.getCodecType() == ICodec.Type.CODEC_TYPE_VIDEO) {
+			if(inputVideoCoder == null) {
+				System.out.println("映像コーダー追加");
+			}
+			else if(inputVideoCoder.hashCode() == coder.hashCode()) {
+				// すでに開いているコーダー
+				return true;
+			}
+			else {
+				System.out.println("映像コーダー開き直し");
+				inputVideoCoder.close();
+				inputVideoCoder = null;
+			}
+			videoStreamId = packet.getStreamIndex();
+			if(coder.open() < 0) {
+				throw new RuntimeException("video入力用のデコーダーを開くのに失敗したよん");
+			}
+			inputVideoCoder = coder;
+		}
+		else {
+			return false;
+		}
+		return true;
 	}
 }

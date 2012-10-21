@@ -2,6 +2,7 @@ package com.ttProject.xuggle.flv;
 
 import java.io.FileInputStream;
 
+import com.ttProject.xuggle.Entry;
 import com.xuggle.xuggler.io.IURLProtocolHandler;
 
 /**
@@ -19,7 +20,7 @@ public class FlvHandler implements IURLProtocolHandler {
 	public FlvHandler() {
 		try {
 			// ファイルの読み込み
-			fis = new FileInputStream("/Users/xxxx/testinput.flv");
+			fis = new FileInputStream(Entry.targetFile);
 		}
 		catch (Exception e) {
 		}
